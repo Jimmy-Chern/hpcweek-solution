@@ -73,3 +73,7 @@ options:
   -S HEIGHT WIDTH, --size HEIGHT WIDTH
                         Height and width for a random grid.
 ```
+
+## 提交
+
+请在 oj 评测中提交 `NG.cpp` 和 `conway.py` 两个文件。
