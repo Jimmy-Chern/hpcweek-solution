@@ -59,7 +59,7 @@ def Expand_Ref(grid, iter):
             break
     return grid
 
-# ========= 可修改部分 ==========
+# ========= modifiable ==========
 
 import NG
 
