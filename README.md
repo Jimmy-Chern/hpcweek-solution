@@ -33,3 +33,18 @@ This repository contains optimization solutions for the ZJU HPC Week competition
 The execution commands listed above are specific references to the author's setup on the cluster (using SLURM job submission scripts like `instr2` or `run`).
 
 **If you do not have the same environment:** Please refer to the source code and the provided shell scripts for the underlying compilation and running logic, which can be adapted for your local environment.
+
+## Challenges and Failed Optimization Attempts
+
+During the optimization process, several approaches were attempted but resulted in either performance regressions or were not fully debugged due to time constraints:
+
+1.  **Conway's Game of Life (NEON Vectorization):**
+    * An attempt was made to use NEON instructions to process the state of 16 cells simultaneously. This effort resulted in **negative optimization (performance regression)**, indicating that the overhead introduced by vectorization likely outweighed the computational benefits in this specific context.
+
+2.  **Minecraft Lighting Simulation (Incremental Algorithm):**
+    * The classic incremental lighting algorithm was implemented. However, due to time constraints, the implementation could not be fully debugged and validated. The semi-finished work related to this attempt is located in `mcticks/world`.
+
+3.  **RVLLM (Tiled Matrix Multiplication for Quantization):**
+    * An alternative approach using tiled (blocked) matrix multiplication was explored within the `ggml_compute_forward_mul_mat_one_chunk` function.
+    * **Experimentation showed that performance immediately degraded upon columnar blocking of matrix A.**
+    * This observation suggests that **memory access locality** (maintaining contiguous memory access) was a more critical factor for performance than optimizing the computation-to-memory-access ratio (C/M ratio). (The current dot-product algorithm has a C/M ratio of $1/2$, while the tiled approach *theoretically* aimed for a higher ratio like $M \times N / (M + N)$, but suffered due to poor spatial locality caused by frequent non-contiguous row accesses).
