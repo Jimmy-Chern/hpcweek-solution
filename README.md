@@ -14,4 +14,4 @@ The primary performance gains came from the following areas:
 3.  **Sparse Matrix-Matrix Multiplication (SPMM) with CSR Format:**
     * Accelerated memory access by employing an algorithm where each **single element of matrix A multiplies an entire row of matrix B** (often referred to as a row-wise block approach), leveraging spatial locality.
 4.  **Other General Optimizations (Omitted for brevity):**
-    * General optimizations include leveraging **SIMD/NEON** for vectorization (e.g., in CT reconstruction) and applying techniques like **Software Vector Management (SVM)** to accelerate dot-product computations in $\text{Q}_4 / \text{Q}_8$ quantization inference.
+    * General optimizations include leveraging **SIMD/NEON** for vectorization (e.g., in CT reconstruction) and applying techniques like **SVE** to accelerate dot-product computations in $\text{Q}_4 / \text{Q}_8$ quantization inference.
