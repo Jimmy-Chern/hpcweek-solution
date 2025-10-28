@@ -1,7 +1,7 @@
 import curses
 import asyncio
 from conway import Next_Generation_Ref
-
+from NG import Next_Generation_Cpp
 class World:
     _instance = None
 
@@ -124,7 +124,7 @@ class World:
 
         prev_grid = [row[:] for row in self.grid]
         # replace with your own next_generation function!
-        self.grid, dg = Next_Generation_Ref(self.grid)
+        self.grid, dg = Next_Generation_Cpp(self.grid)
         self.ul = (self.ul[0] + dg[0], self.ul[1] + dg[1])
         self.generation += 1
         

@@ -1,0 +1,7 @@
+python setup.py bdist_wheel
+python setup.py build
+python setup.py build_ext
+python setup.py install
+python setup.py install_lib
+cd src
+python main.py -F ../data/sample2.in -I 100

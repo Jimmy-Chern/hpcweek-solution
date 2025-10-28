@@ -62,7 +62,41 @@ def Expand_Ref(grid, iter):
 # ========= modifiable ==========
 
 import NG
+import numpy as np
+from scipy.ndimage import convolve
+def Next_Generation_Convolve(grid):
+    if not grid or not grid[0]:
+        return [], (0, 0)
 
+    G = np.array(grid, dtype=np.int8)
+
+    height, width = G.shape
+
+    padded_G = np.zeros((height + 2, width + 2), dtype=np.int8)
+    padded_G[1:-1, 1:-1] = G
+
+    K = np.array([[1, 1, 1],
+                  [1, 0, 1],
+                  [1, 1, 1]], dtype=np.int8)
+
+    C = convolve(padded_G, K, mode='constant', cval=0)
+
+    G_prime = ((padded_G == 1) & (C == 2)) | (C == 3)
+    G_prime = G_prime.astype(np.int8)
+
+    live_cells = np.argwhere(G_prime == 1)
+    if live_cells.size == 0:
+        return [], (0, 0)
+
+    min_y, min_x = live_cells.min(axis=0)
+    max_y, max_x = live_cells.max(axis=0)
+
+    new_grid_array = G_prime[min_y : max_y + 1, min_x : max_x + 1]
+
+    dy = min_y - 1
+    dx = min_x - 1
+
+    return new_grid_array.tolist(), (dy, dx)
 def Expand(grid, iter):
-    # Implement your own version to calculate the final grid
-    return Expand_Ref(grid, iter)
+    final_grid = NG.Expand_Cpp(grid, iter)
+    return final_grid

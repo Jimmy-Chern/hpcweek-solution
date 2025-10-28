@@ -1,0 +1,7 @@
+python setup.py bdist_wheel
+python setup.py build
+python setup.py build_ext
+python setup.py install
+python setup.py install_lib
+cd src
+OMP_NUM_THREADS=16 perf record -g python main.py -V -F ../data/sample1.in -I 100
