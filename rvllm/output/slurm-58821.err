@@ -1,0 +1,13 @@
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c: In function ‘rvllm_vec_dot_q4_0_q8_0’:
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:296:25: error: implicit declaration of function ‘__riscv_vfredsum_vs_f32m1_f32m1’; did you mean ‘__riscv_vfredosum_vs_f32m1_f32m1’? [-Wimplicit-function-declaration]
+  296 |         total_res_vec = __riscv_vfredsum_vs_f32m1_f32m1(scaled_sum, total_res_vec, vl_max_32_m1);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |                         __riscv_vfredosum_vs_f32m1_f32m1
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:296:25: error: incompatible types when assigning to type ‘vfloat32m1_t’ from type ‘int’
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:305:15: error: implicit declaration of function ‘__riscv_vmv_f_s_f32m1_f32’; did you mean ‘__riscv_vfmv_f_s_f32m1_f32’? [-Wimplicit-function-declaration]
+  305 |     *result = __riscv_vmv_f_s_f32m1_f32(total_res_vec);
+      |               ^~~~~~~~~~~~~~~~~~~~~~~~~
+      |               __riscv_vfmv_f_s_f32m1_f32
+gmake[2]: *** [CMakeFiles/qmatmul.dir/build.make:79: CMakeFiles/qmatmul.dir/src/qmatmul.c.o] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:87: CMakeFiles/qmatmul.dir/all] Error 2
+gmake: *** [Makefile:91: all] Error 2

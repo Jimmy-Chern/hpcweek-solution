@@ -1,0 +1,10 @@
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:382:6: error: redefinition of ‘ggml_compute_forward_mul_mat_one_chunk’
+  382 | void ggml_compute_forward_mul_mat_one_chunk(
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:23:6: note: previous definition of ‘ggml_compute_forward_mul_mat_one_chunk’ with type ‘void(const struct ggml_compute_params *, struct ggml_tensor *, const enum ggml_type,  const int64_t,  const int64_t,  const int64_t,  const int64_t,  const int64_t)’ {aka ‘void(const struct ggml_compute_params *, struct ggml_tensor *, const enum ggml_type,  const long int,  const long int,  const long int,  const long int,  const long int)’}
+   23 | void ggml_compute_forward_mul_mat_one_chunk(
+      |      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+gmake[2]: *** [CMakeFiles/qmatmul.dir/build.make:79: CMakeFiles/qmatmul.dir/src/qmatmul.c.o] Error 1
+gmake[2]: *** Waiting for unfinished jobs....
+gmake[1]: *** [CMakeFiles/Makefile2:87: CMakeFiles/qmatmul.dir/all] Error 2
+gmake: *** [Makefile:91: all] Error 2
