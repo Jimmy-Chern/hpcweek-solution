@@ -1,22 +1,26 @@
-#include <cmath>        // 包含数学函数 (如 cos, sin, std::floor)
-#include <algorithm>    // 包含算法函数 (如 max, min, copy)
-#include <vector>       // 包含 std::vector 容器
-#include <omp.h>        // 包含 OpenMP 库
-#include <arm_neon.h>   // 包含 ARM NEON SIMD 指令集
-#include <iostream>     // 包含输入/输出流
+#include <cmath>
+#include <algorithm>
+#include <vector>
+#include <omp.h>
+#include <arm_neon.h>
+#include <iostream>
+#include <complex> // <-- 必需：用于 FFT
 
-#include "fbp.h"        // 包含自定义头文件
+#include "fbp.h"
 
 // 使用 constexpr double PI 以避免多次计算
 constexpr double PI = 3.14159265358979323846;
 
+// [!!! FIX !!!] 切换到 double 精度
+using Complex = std::complex<double>;
+
 // ------------------------------------------------------------
-// STEP 1: Ramp Filter Functions
+// STEP 1: Ramp Filter Functions (FFT 版本)
 // ------------------------------------------------------------
 
-// 生成空间域的 Ramp 滤波器核（与原代码相同）
+// ramp_kernel 函数 (与原代码相同, 仍生成 float)
 static std::vector<float> ramp_kernel(int len, float d = 1.0f) {
-    if (len % 2 == 0) len += 1; // 确保长度为奇数以保证对称性
+    if (len % 2 == 0) len += 1; 
     int K = len / 2;
 
     std::vector<float> h(len, 0.0f);
@@ -32,91 +36,110 @@ static std::vector<float> ramp_kernel(int len, float d = 1.0f) {
     return h;
 }
 
+// 辅助函数：计算大于等于 n 的下一个 2 的幂次
+static int next_power_of_2(int n) {
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n++;
+    return n;
+}
+
 /**
- * @brief 滤波投影（串行版本，优化了内存）
- * 优化 #2：移除了 OpenMP pragma 以避免嵌套并行。
- * 优化 #4：将 'tmp_row' 的分配移到角度循环之外。
- * 优化 #5：使用 NEON vld2q_f32 (跨步加载) 仅处理稀疏核的非零值 (k=0 和 k 为奇数)。
+ * @brief (新) 迭代式、In-place Radix-2 FFT (DIT)
+ * [!!! FIX !!!] 现在操作 std::complex<double>
  */
-static void filter_projections_serial(float* sino, int n_angles, int n_det, const std::vector<float>& kernel) {
-    int K = int(kernel.size() / 2);
-    int kernel_len = kernel.size();
-    
-    // 优化 #4：在循环外分配一次临时缓冲区
-    std::vector<float> tmp_row(n_det);
+static void fft(std::vector<Complex>& data, int M, bool inverse) {
+    if (M <= 1) return;
 
-    // 这是一个串行循环（由外层 OMP 循环的单个线程执行）
-    for (int a = 0; a < n_angles; ++a) {
-        float* row = &sino[a * n_det];
-        
-        // --- 1D Convolution with NEON (Strided Load) ---
-        for (int x = 0; x < n_det; ++x) {
-            float acc = 0.0f; // 标量累加器
-            
-            int k_start = std::max(-K, -x);
-            int k_end = std::min(K, n_det - 1 - x);
-            
-            // NEON 向量化累加器 (用于奇数 k)
-            float32x4_t v_acc_conv = vdupq_n_f32(0.0f);
-            int k;
-
-            // 1. Handle k=0 (center point) 单独处理中心点
-            if (k_start <= 0 && 0 <= k_end) {
-                acc += row[x] * kernel[K];
-            }
-
-            // 2. Handle positive odd k (k = 1, 3, 5, ...)
-            // 找到第一个 k >= k_start 且 k >= 1 的奇数
-            k = (k_start <= 0) ? 1 : (k_start % 2 != 0 ? k_start : k_start + 1);
-            
-            // 向量化循环：一次处理 4 个奇数 (k, k+2, k+4, k+6)
-            for (; k <= k_end - 7; k += 8) { 
-                // k 是奇数。vld2q_f32 从 &row[x+k] 开始加载
-                // val[0] = {row[x+k], row[x+k+2], row[x+k+4], row[x+k+6]}
-                // val[1] = {row[x+k+1], row[x+k+3], row[x+k+5], row[x+k+7]} (偶数偏移, 忽略)
-                float32x4x2_t v_row_pair = vld2q_f32(&row[x + k]);
-                float32x4x2_t v_kern_pair = vld2q_f32(&kernel[K + k]);
-
-                // 仅累加 val[0] (奇数偏移) 的乘积
-                v_acc_conv = vmlaq_f32(v_acc_conv, v_row_pair.val[0], v_kern_pair.val[0]);
-            }
-            // 标量收尾：处理剩余的正奇数 k
-            for (; k <= k_end; k += 2) {
-                acc += row[x + k] * kernel[K + k];
-            }
-
-            // 3. Handle negative odd k (k = -1, -3, -5, ...)
-            // 找到第一个 k <= k_end 且 k <= -1 的奇数
-            k = (k_end >= 0) ? -1 : (k_end % 2 != 0 ? k_end : k_end - 1);
-            
-            // 向量化循环：一次处理 4 个奇数 (k, k-2, k-4, k-6)
-            for (; k >= k_start + 7; k -= 8) {
-                // k 是奇数。vld2q_f32 从 &row[x+k-6] 开始加载
-                // val[0] = {row[x+k-6], row[x+k-4], row[x+k-2], row[x+k]}
-                float32x4x2_t v_row_pair = vld2q_f32(&row[x + k - 6]);
-                float32x4x2_t v_kern_pair = vld2q_f32(&kernel[K + k - 6]);
-                
-                // 仅累加 val[0] (奇数偏移) 的乘积
-                v_acc_conv = vmlaq_f32(v_acc_conv, v_row_pair.val[0], v_kern_pair.val[0]);
-            }
-            // 标量收尾：处理剩余的负奇数 k
-            for (; k >= k_start; k -= 2) {
-                 acc += row[x + k] * kernel[K + k];
-            }
-            
-            // 4. 水平求和
-            acc += vaddvq_f32(v_acc_conv); // 加上所有向量化奇数 k 的累加结果
-            tmp_row[x] = acc; // 存入临时缓冲区
+    // 1. Bit-Reversal Permutation
+    int j = 0;
+    for (int i = 1; i < M; ++i) {
+        int bit = M >> 1;
+        while (j >= bit) {
+            j -= bit;
+            bit >>= 1;
         }
+        j += bit;
+        if (i < j) {
+            std::swap(data[i], data[j]);
+        }
+    }
 
-        // 将滤波结果写回输入数组
-        std::copy(tmp_row.begin(), tmp_row.end(), row);
+    // 2. 蝶形运算
+    for (int len = 2; len <= M; len <<= 1) {
+        // [!!! FIX !!!] 全部使用 double 精度
+        double ang = 2.0 * PI / (double)len * (inverse ? -1.0 : 1.0);
+        Complex wlen(std::cos(ang), std::sin(ang)); // wlen 现在是 (double, double)
+
+        for (int i = 0; i < M; i += len) {
+            Complex w(1.0, 0.0); 
+            for (int k = 0; k < len / 2; ++k) {
+                Complex u = data[i + k];
+                Complex v = data[i + k + len / 2] * w;
+                
+                data[i + k] = u + v;
+                data[i + k + len / 2] = u - v;
+                
+                w *= wlen; 
+            }
+        }
+    }
+
+    // 3. (仅 iFFT) 缩放
+    if (inverse) {
+        double scale = 1.0 / (double)M;
+        for (int i = 0; i < M; ++i) {
+            data[i] *= scale;
+        }
     }
 }
 
+
+/**
+ * @brief (新) 滤波投影（FFT 版本）
+ * [!!! FIX !!!] 执行 double <-> float 转换
+ */
+static void filter_projections_fft(float* sino, int n_angles, int n_det, int M,
+                                   const std::vector<Complex>& kernel_freq) // kernel_freq 已是 double
+{
+    // [!!! FIX !!!] buffer 现在是 double
+    std::vector<Complex> buffer(M);
+
+    for (int a = 0; a < n_angles; ++a) {
+        float* row = &sino[a * n_det];
+
+        // 1. 复制数据 (float -> double) 并补零
+        for (int i = 0; i < n_det; ++i) {
+            buffer[i] = {(double)row[i], 0.0}; // 转换
+        }
+        std::fill(buffer.begin() + n_det, buffer.end(), Complex(0.0, 0.0));
+
+        // 2. 正向 FFT (double)
+        fft(buffer, M, false);
+
+        // 3. 频率域乘法 (double)
+        for (int i = 0; i < M; ++i) {
+            buffer[i] *= kernel_freq[i];
+        }
+
+        // 4. 逆向 FFT (double)
+        fft(buffer, M, true);
+
+        // 5. 将结果 (double -> float) 复制回
+        for (int i = 0; i < n_det; ++i) {
+            row[i] = (float)buffer[i].real(); // 转换
+        }
+    }
+}
+
+
 // ------------------------------------------------------------
 // STEP 2: Backprojection Function (反投影)
-// (此部分为完整代码，修复了因“...”导致的编译错误)
+// (此部分为 "想法二" 的优化版本, 保持 float 和 NEON)
 // ------------------------------------------------------------
 
 void fbp_reconstruct_3d(
@@ -127,151 +150,178 @@ void fbp_reconstruct_3d(
     int n_det,
     const std::vector<float>& angles_deg
 ) {
-    size_t slice_size = size_t(n_angles) * n_det; // 单一切片 sinogram 大小
-    size_t recon_size = size_t(n_det) * n_det; // 单一切片重建图像大小
+    size_t slice_size = size_t(n_angles) * n_det;
+    size_t recon_size = size_t(n_det) * n_det;
 
     // ============================================================
     // STEP 0: Precomputation (预计算)
+    // [!!! FIX !!!] 预计算 double 精度的 FFT 核
     // ============================================================
-    auto kernel = ramp_kernel(n_det | 1); // 计算 Ramp 核
+
+    // 1. 生成空间域核 (float)
+    auto kernel_spatial = ramp_kernel(n_det | 1);
+    int N_spatial = n_det;
+    int K_spatial = kernel_spatial.size(); 
+    int K = K_spatial / 2;
+
+    // 2. 计算 FFT 所需的补零大小 (M)
+    int M = next_power_of_2(N_spatial + K_spatial - 1); 
+
+    // 3. [!!! FIX !!!] 创建 double 精度的补零核
+    std::vector<Complex> kernel_freq(M, {0.0, 0.0});
+
+    // 4. 复制核并执行 "FFT Shift" (float -> double)
+    // (使用我们推导出的正确逻辑)
+    
+    // h_pad[0] = h_conv[0]
+    kernel_freq[0] = {(double)kernel_spatial[K], 0.0};
+    
+    // h_pad[n] = h_conv[n] = kernel_spatial[K-n]
+    for (int n = 1; n <= K; ++n) {
+        kernel_freq[n] = {(double)kernel_spatial[K - n], 0.0};
+    }
+    
+    // h_pad[M-n] = h_conv[-n] = kernel_spatial[K+n]
+    for (int n = 1; n <= K; ++n) { 
+        kernel_freq[M - n] = {(double)kernel_spatial[K + n], 0.0};
+    }
+    
+    // 5. 预计算核的 FFT (double)
+    fft(kernel_freq, M, false);
+
+
+    // --- (以下反投影部分保持 float 和 NEON 不变) ---
 
     // 预计算所有角度的三角函数值
     std::vector<float> cos_theta(n_angles);
     std::vector<float> sin_theta(n_angles);
     const float deg2rad = float(PI) / 180.0f;
 
-    // 此处预计算也可以并行化
-    #pragma omp parallel for 
+    #pragma omp parallel for schedule(static)
     for (int ai = 0; ai < n_angles; ++ai) {
         float th = angles_deg[ai] * deg2rad;
-        cos_theta[ai] = std::cos(th); 
+        cos_theta[ai] = std::cos(th);
         sin_theta[ai] = std::sin(th);
     }
 
     // 图像几何参数
-    const float cx = (n_det - 1) * 0.5f; // 图像中心 X
-    const float cy = (n_det - 1) * 0.5f; // 图像中心 Y
-    const float t_half = (n_det - 1) * 0.5f; // 探测器偏移量
-    const float scale = float(PI) / float(n_angles); // 归一化因子
+    const float cx = (n_det - 1) * 0.5f;
+    const float cy = (n_det - 1) * 0.5f;
+    const float t_half = (n_det - 1) * 0.5f;
+    const float scale = float(PI) / float(n_angles);
 
     // ============================================================
     // STEP 1: Filter all projections (Ramp 滤波)
+    // (调用 double-precision FFT 版本)
     // ============================================================
 
-    // 优化 #2：仅并行化最外层的切片循环
-    #pragma omp parallel for schedule(dynamic)
+    #pragma omp parallel for schedule(static)
     for (int slice_id = 0; slice_id < n_slices; ++slice_id) {
         float* sino_slice = sino_buffer + slice_id * slice_size;
-        // 调用优化的串行滤波版本 (现在使用 vld2q_f32)
-        filter_projections_serial(sino_slice, n_angles, n_det, kernel); 
+        // 调用新的 double-precision FFT 滤波函数
+        filter_projections_fft(sino_slice, n_angles, n_det, M, kernel_freq);
     }
 
     // ============================================================
     // STEP 2: Backprojection (反投影)
+    // (使用 "想法二" 的缓存优化 + 精度修正版本)
     // ============================================================
-    
-    // 使用 collapse(2) 将两层循环合并，增加并行粒度
-    #pragma omp parallel for collapse(2) schedule(dynamic)
+
+    #pragma omp parallel for collapse(2) schedule(static)
     for (int slice_id = 0; slice_id < n_slices; ++slice_id) {
         for (int y = 0; y < n_det; ++y) {
-            
-            // --- 修复：恢复了这些指针的定义 ---
+
             const float* sino_slice = sino_buffer + slice_id * slice_size;
             float* recon_slice = recon_buffer + slice_id * recon_size;
-
-            float yr = y - cy; // Y 坐标相对于图像中心
             float* recon_row = recon_slice + y * n_det;
+            
+            float yr = y - cy; 
 
-            // 遍历 X 轴
-            for (int x = 0; x < n_det; ++x) {
-                float xr = x - cx; // X 坐标相对于图像中心
-                float acc = 0.0f; // 最终的标量累加器
+            // 1. 将整行累加器清零 (float)
+            int x_zero = 0;
+            float32x4_t v_zero = vdupq_n_f32(0.0f);
+            for (; x_zero <= n_det - 4; x_zero += 4) {
+                vst1q_f32(&recon_row[x_zero], v_zero);
+            }
+            for (; x_zero < n_det; ++x_zero) {
+                recon_row[x_zero] = 0.0f;
+            }
 
-                // 优化 #3：初始化 NEON 累加器
-                float32x4_t v_acc = vdupq_n_f32(0.0f); 
+            // 2. 将角度循环 (ai) 移到外层
+            for (int ai = 0; ai < n_angles; ++ai) {
+                
+                const float* sino_row = sino_slice + ai * n_det;
+                const float c = cos_theta[ai];
+                const float s = sin_theta[ai];
+                const float yr_s = yr * s; 
 
-                // --- Angle Loop (NEON 优化) ---
-                int ai = 0;
-                for (; ai <= n_angles - 4; ai += 4) {
-                    // --- 修复：恢复了这些向量的定义 ---
-                    // 加载 4 个 cos 和 sin 值
-                    float32x4_t v_c = vld1q_f32(&cos_theta[ai]);
-                    float32x4_t v_s = vld1q_f32(&sin_theta[ai]);
-                    
-                    // 将 xr, yr, t_half 广播到 4 元素向量
-                    float32x4_t v_xr = vdupq_n_f32(xr);
-                    float32x4_t v_yr = vdupq_n_f32(yr);
-                    float32x4_t v_t_half = vdupq_n_f32(t_half);
-                    
-                    // 1. (NEON) 计算 4 个投影距离 t = xr*c + yr*s
-                    float32x4_t v_t = vmlaq_f32(vmulq_f32(v_xr, v_c), v_yr, v_s); 
-                    
-                    // 2. (NEON) 转换为探测器坐标 u = t + t_half
+                // 3. 在内层遍历 x 轴 (NEON)
+                float32x4_t v_c = vdupq_n_f32(c);
+                float32x4_t v_yr_s = vdupq_n_f32(yr_s);
+                float32x4_t v_t_half = vdupq_n_f32(t_half);
+                float32x4_t v_cx = vdupq_n_f32(cx);
+                float32x4_t v_idx_step = vdupq_n_f32(4.0f);
+                float32x4_t v_x_idx = {0.0f, 1.0f, 2.0f, 3.0f}; 
+
+                int x = 0;
+                for (; x <= n_det - 4; x += 4) {
+                    float32x4_t v_xr = vsubq_f32(v_x_idx, v_cx);
+                    float32x4_t v_t = vmlaq_f32(v_yr_s, v_xr, v_c);
                     float32x4_t v_u = vaddq_f32(v_t, v_t_half);
-                    
-                    // 优化 #3：标量插值，但准备用于 NEON 累加
-                    float interp_vals[4]; // 临时数组存储 4 个插值结果
 
-                    // 标量回退循环 (k=0 到 3)
+                    // 标量 Gather (L1 缓存命中)
+                    float interp_vals[4]; 
                     for (int k = 0; k < 4; ++k) {
-                        // --- 修复：恢复了这些变量的定义 ---
-                        float u = v_u[k]; // 获取第 k 个 u 值
-                        
-                        // 恢复：根据您的反馈，std::floor 导致 MSE 错误，换回 (int)
-                        int u0 = (int)u;
+                        float u = v_u[k];
+                        int u0 = (int)u; 
                         float du = u - (float)u0;
                         int u1 = u0 + 1;
-                        
-                        // 获取对应的 sinogram 行
-                        const float* sino_row = sino_slice + (ai + k) * n_det;
-                        
-                        // 边界检查和线性插值
+
                         float v0 = 0.0f;
                         float v1 = 0.0f;
                         if (u0 >= 0 && u0 < n_det) v0 = sino_row[u0];
                         if (u1 >= 0 && u1 < n_det) v1 = sino_row[u1];
-                        
-                        // 计算插值结果
                         interp_vals[k] = (1.0f - du) * v0 + du * v1;
                     }
-
-                    // (接上文) 优化 #3：将 4 个标量插值结果加载回 NEON 并进行向量累加
+                    
+                    // NEON 累加
                     float32x4_t v_interp = vld1q_f32(interp_vals);
-                    v_acc = vaddq_f32(v_acc, v_interp); // v_acc += v_interp
-                }
-                
-                // 优化 #3：水平求和 NEON 累加器的结果
-                acc = vaddvq_f32(v_acc);
-                
-                // --- 标量余数循环 ---
-                // (处理末尾 0-3 个剩余的角度)
-                for (; ai < n_angles; ++ai) {
-                    // --- 修复：恢复了这些变量的定义 ---
-                    float c = cos_theta[ai];
-                    float s = sin_theta[ai];
-                    float t = xr * c + yr * s;
-                    float u = t + t_half;
+                    float32x4_t v_acc_old = vld1q_f32(&recon_row[x]); 
+                    v_acc_old = vaddq_f32(v_acc_old, v_interp);
+                    vst1q_f32(&recon_row[x], v_acc_old); 
 
-                    // 恢复：根据您的反馈，std::floor 导致 MSE 错误，换回 (int)
+                    v_x_idx = vaddq_f32(v_x_idx, v_idx_step); 
+                }
+
+                // 标量收尾
+                for (; x < n_det; ++x) {
+                    float xr = x - cx;
+                    float t = xr * c + yr_s;
+                    float u = t + t_half;
+                    
                     int u0 = (int)u;
                     float du = u - (float)u0;
                     int u1 = u0 + 1;
 
-                    const float* sino_row = sino_slice + ai * n_det;
                     float v0 = 0.0f;
                     float v1 = 0.0f;
                     if (u0 >= 0 && u0 < n_det) v0 = sino_row[u0];
                     if (u1 >= 0 && u1 < n_det) v1 = sino_row[u1];
-                    
-                    // 累加到主标量累加器
-                    acc += (1.0f - du) * v0 + du * v1;
+                    recon_row[x] += (1.0f - du) * v0 + du * v1;
                 }
+            } // end for(ai)
 
-                // 应用归一化因子并存储最终像素值
-                recon_row[x] = acc * scale;
+            // 4. 应用 scale 因子
+            float32x4_t v_scale = vdupq_n_f32(scale);
+            int x_scale = 0;
+            for (; x_scale <= n_det - 4; x_scale += 4) {
+                 float32x4_t v_val = vld1q_f32(&recon_row[x_scale]);
+                 v_val = vmulq_f32(v_val, v_scale);
+                 vst1q_f32(&recon_row[x_scale], v_val);
             }
-        }
-    }
+            for (; x_scale < n_det; ++x_scale) {
+                recon_row[x_scale] *= scale;
+            }
+        } // end for(y)
+    } // end for(slice_id)
 }
-
-
