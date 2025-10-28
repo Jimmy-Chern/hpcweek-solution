@@ -1,0 +1,1 @@
+/usr/bin/cc -fPIC -lgomp -Wl,-rpath,/hpcweek/rvllm/ggml/lib -march=rv64gcv -shared-libgcc -Wl,--dependency-file=CMakeFiles/qmatmul.dir/link.d -shared -Wl,-soname,libqmatmul.so -o lib/libqmatmul.so CMakeFiles/qmatmul.dir/src/qmatmul.c.o CMakeFiles/qmatmul.dir/src/mul_mat_compute.c.o CMakeFiles/qmatmul.dir/src/type_traits.c.o

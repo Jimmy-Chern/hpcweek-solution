@@ -1,0 +1,2 @@
+rm ./slurm_output/slurm*
+sbatch run.sh

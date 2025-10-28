@@ -1,0 +1,20 @@
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c: In function ‘rvllm_vec_dot_q4_0_q8_0’:
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:433:48: error: incompatible type for argument 1 of ‘__riscv_vfmv_s_f_f32m1’
+  433 |         final_res_vec = __riscv_vfmv_s_f_f32m1(final_res_vec, current_res + block_res, vl_f32_m1);
+      |                                                ^~~~~~~~~~~~~
+      |                                                |
+      |                                                vfloat32m1_t
+In file included from /hpcweek/home/s3240106190/rvllm/src/qmatmul.c:7:
+/usr/lib/gcc/riscv64-linux-gnu/14/include/riscv_vector.h:40:9: note: expected ‘float’ but argument is of type ‘vfloat32m1_t’
+   40 | #pragma riscv intrinsic "vector"
+      |         ^~~~~
+/hpcweek/home/s3240106190/rvllm/src/qmatmul.c:433:25: error: too many arguments to function ‘__riscv_vfmv_s_f_f32m1’
+  433 |         final_res_vec = __riscv_vfmv_s_f_f32m1(final_res_vec, current_res + block_res, vl_f32_m1);
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/usr/lib/gcc/riscv64-linux-gnu/14/include/riscv_vector.h:40:9: note: declared here
+   40 | #pragma riscv intrinsic "vector"
+      |         ^~~~~
+gmake[2]: *** [CMakeFiles/qmatmul.dir/build.make:79: CMakeFiles/qmatmul.dir/src/qmatmul.c.o] Error 1
+gmake[2]: *** Waiting for unfinished jobs....
+gmake[1]: *** [CMakeFiles/Makefile2:87: CMakeFiles/qmatmul.dir/all] Error 2
+gmake: *** [Makefile:91: all] Error 2

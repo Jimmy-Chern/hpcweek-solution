@@ -6,3 +6,5 @@ myenv/
 *.egg-info/
 *.so
 NG.cpython*
+hpcweek-ct/input/sinogram.hdf5
+hpcweek-ct.zip
